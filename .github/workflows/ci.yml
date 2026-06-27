@@ -1,0 +1,77 @@
+name: CI - Build and Test
+
+on:
+  push:
+    branches: ["main", "develop"]
+  pull_request:
+    branches: ["main", "develop"]
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          java-version: "21"
+          distribution: "temurin"
+          cache: maven
+
+      - name: Give execute permission to Maven Wrapper
+        run: chmod +x mvnw
+
+      - name: Build and run tests
+        run: ./mvnw clean verify -B
+
+      - name: Upload test reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results
+          path: target/surefire-reports/
+
+  smoke-test-compose:
+    needs: build-and-test
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Create test .env
+        run: |
+          cat <<END > .env
+          DB_NAME=sheikah_db
+          DB_USERNAME=postgres
+          DB_PASSWORD=postgres
+          DB_URL=jdbc:postgresql://localhost:5434/sheikah_db
+          END
+
+      - name: Start Docker Compose
+        run: docker compose up --build -d
+
+      - name: Wait for application response
+        run: |
+          for i in $(seq 1 20); do
+            if curl -s http://localhost:8080/api/specimens/getAll -o /dev/null; then
+              echo "Application responded correctly."
+              exit 0
+            fi
+            echo "Waiting for application to start... ($i/20)"
+            sleep 5
+          done
+          echo "Application did not respond on time."
+          docker compose logs
+          exit 1
+
+      - name: Show logs on failure
+        if: failure()
+        run: docker compose logs
+
+      - name: Shutdown Docker Compose
+        if: always()
+        run: docker compose down -v
